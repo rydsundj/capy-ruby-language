@@ -1,0 +1,40 @@
+start
+print("This is a string")
+print(42)
+
+variable boolTrue = true
+if (boolTrue == true)
+{
+    print("yes")
+}
+
+variable x = 0
+for (3)
+{
+    print("Value of x: ")
+    print(x)
+    x = x + 1
+}
+
+while(x < 10)
+{
+    print("x is less than 10")
+    x = x + 1
+}
+
+function add(x, y)
+{
+    variable sum = x + y
+    return (sum)
+}
+
+variable sumReturned = call add(x, 20)
+print(sumReturned)
+
+variable lst = [4, -3, 2.3, "test"]
+variable last = lst.removelast
+print(lst)
+print(last)
+
+end
+

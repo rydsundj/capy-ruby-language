@@ -1,0 +1,147 @@
+#!/usr/bin/env ruby
+
+require_relative 'node'
+require_relative 'rdparse'
+require 'logger'
+
+class CaPy
+    attr_accessor :caPyParser
+
+    def initialize
+      @caPyParser = Parser.new('caPy parser') do
+        token(/"[^\"]*"/) {|m| m[1..-2] }
+        token(/'[^\']*'/) {|m| m[1..-2] }
+        token(/start/)      {:start}
+        token(/end/)        {:end}
+        token(/print/)      {:print}
+        token(/variable/)   {:var}
+        token(/true/)       {:true}
+        token(/false/)      {:false}
+        token(/while/)      {:while}
+        token(/for/)        {:for}
+        token(/if/)         {:if}
+        token(/elseif/)     {:elseif}
+        token(/else/)       {:else}
+        token(/stop/)       {:stop}
+        token(/function/)   {:function}
+        token(/call/)       {:call}
+        token(/return/)     {:return}
+        token(/add/)        {:add}
+        token(/removelast/) {:removelast}
+        token(/[a-zA-Z]+[a-zA-Z0-9_]*/) {|m| m.to_sym }
+        token(/\s+/)
+        token(/\d+\.\d+/) {|m| m.to_f}
+        token(/\d+/) {|m| m.to_i}
+        token(/(<=|>=|==|!=|<|>)/) {|m| m}
+        token(/\w+/) {|m| m}
+        token(/./) {|m| m}
+
+        start :program do
+            match(:start, :statements, :end) {|_,satser,_| satser}
+        end
+
+        rule :statements do
+            match(:statement) {|sats| [sats] }
+            match(:statements, :statement) {|statements, statement| statements += [statement] }
+        end
+
+        rule :statement do
+            match(:print, '(', :expr, ')')  {|_, _, a, _| Print.new(a) }
+            match(:var, Symbol, "=", :expr) {|_, a, _, b| Define.new(AtomNode.new(a.to_s), b) }
+            match(Symbol, "=", :expr)       {|a, _, b| Assign.new(AtomNode.new(a.to_s), b) }
+
+            match(:if, '(', :expr, ')', '{', :statements, '}')     {|_, _, condition, _, _, statements, _| IfNode.new(condition, statements) }
+            match(:elseif, '(', :expr, ')', '{', :statements, '}') {|_, _, condition, _, _, statements, _| ElseifNode.new(condition, statements) }
+            match(:else, '{', :statements, '}'){|_, _, statements, _| ElseNode.new(statements) }
+            match(:stop) {|_| StopNode.new}
+
+            match(:while, '(', :expr, ')', '{', :statements, '}') {|_, _, condition, _, _, statements, _| WhileNode.new(condition, statements) }
+            match(:for, '(', Integer, ')', '{', :statements, '}') {|_, _, number, _, _, statements, _| ForNode.new(AtomNode.new(number), statements) }
+
+            match(:function, Symbol, '(', :parameters, ')', '{', :statements, '}') {|_, identifier, _, parameters, _, _, statements, _| FuncNode.new(AtomNode.new(identifier.to_s), parameters, statements) }
+            match(:return, '(', :expr, ')') {|_, _, a, _| ReturnNode.new(a) }
+
+            match(:expr)
+        end
+
+        rule :parameters do
+          match(:parameter){|p| [p] }
+          match(:parameters, ',', :parameter) {|paras,_,para| paras += [para] }
+        end
+
+        rule :parameter  do
+          match(:expr){|a| a }
+        end
+
+        rule :expr do
+          match('(', :expr, 'or', :expr, ')')  {|_, a, _, b, _| Or.new(a, b) }
+          match('(', :expr, 'and', :expr, ')') {|_, a, _, b, _| And.new(a, b) }
+          match('(', 'not', :expr, ')')        {|_, _, a, _, _| Not.new(a) }
+          match(:expr, '+', :expr)             {|a, _, b| AddNode.new(a, b) }
+          match(:expr, '-', :expr)             {|a, _, b| SubNode.new(a, b) }
+          match(:expr, :comparison, :expr)     {|a, op, b| ComparisonNode.new(a, op, b) }
+          match(Symbol, '.', :add, '(', :expr, ')') {|list, _, _, _, value, _| AddListNode.new(AtomNode.new(list.to_s), value)}
+          match(Symbol, '.', :removelast) {|list, _, _| RemoveLastNode.new(AtomNode.new(list.to_s))}
+          match(:term)
+        end
+
+        rule :comparison do
+          match('<') {|m| m }
+          match('<=') {|m| m }
+          match('>') {|m| m }
+          match('>=') {|m| m }
+          match('==') {|m| m }
+          match('!=') {|m| m }
+        end
+
+        rule :term do
+          match(:term, '*', :atom) {|a, _, b| MultNode.new(a, b) }
+          match(:term, '/', :atom) {|a, _, b| DivNode.new(a, b) }
+          match(:atom)
+        end
+
+        rule :atom do
+          match(:call, Symbol, '(', :parameters, ')') {|_, identifier, _, parameters, _| FuncCallNode.new(AtomNode.new(identifier.to_s), parameters) }
+          match('(', :expr, ')') {|_, a, _| a }
+          match(Symbol, '[', :expr, ']') {|list, _, index, _| IndexNode.new(AtomNode.new(list.to_s), index) }
+          match('[', :parameters, ']') {|_, elements, _| AtomNode.new(elements) }
+          match('-', Integer) {|_, a| AtomNode.new(-a)}
+          match(Integer) {|a| AtomNode.new(a)}
+          match(Float)   {|a| AtomNode.new(a)}
+          match(:true)   {|a| AtomNode.new(true)}
+          match(:false)  {|a| AtomNode.new(false)}
+          match(String)  {|a| if a != "}" then AtomNode.new(a) end}
+          match(Symbol)  {|a| if a != :end then Var.new(a.to_s) end}
+        end
+      end
+    end
+
+    def parse(file)
+        @result = Array.new()
+        file = File.read(file)
+        @result = @caPyParser.parse(file)
+        @result.each do |e|
+          e.execute
+        end
+        @result
+    end
+
+    def log(state = true)
+      if state
+        @caPyParser.logger.level = Logger::DEBUG
+      else
+        @caPyParser.logger.level = Logger::WARN
+      end
+    end
+end
+
+
+if ARGV.length != 1
+  puts "Usage: #{File.basename(__FILE__)} filename.capy"
+  exit 1
+end
+
+file_to_parse = ARGV[0]
+test = CaPy.new
+test.log(false)
+test.parse(file_to_parse)
